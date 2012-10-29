@@ -18,9 +18,12 @@ if (!path.existsSync(zipsdir)) {
   fs.mkdirSync(zipsdir);
 }
 
-var out = [];
-
-function scrapeLinkList() {
+function scrapeLinkList(cb) {
+  var out = {
+    'streets': [],
+    'neighbourhoods': [],
+    'outcomes': []
+  };
   jsdom.env({
     html: linklist,
     scripts: [
@@ -30,25 +33,26 @@ function scrapeLinkList() {
       var $ = window.$;
       // street files
       $('#downloads .months table tr td:nth-child(2) a').each(function(idx, elem) {
-        out.push( $(elem).attr('href') );
+        out['streets'].push( $(elem).attr('href') );
       });
-      // street files
+      // neighbourhoods files
       $('#downloads .months table tr td:nth-child(3) a').each(function(idx, elem) {
-        out.push( $(elem).attr('href') );
+        out['neighbourhoods'].push( $(elem).attr('href') );
       });
       // not interested in outcomes atm (final column)
 
       // now save
       fs.writeFile(outlistfp, JSON.stringify(out, null, 2), function(err) {
         console.log('JSON saved to ' + outlistfp);
+        cb();
       });
     }
   });
 }
 
 function scrapeZip() {
-  var links = JSON.parse(fs.readFileSync(outlistfp));
-  links.slice(0, 10).forEach(function(link) {
+  var links = JSON.parse(fs.readFileSync(outlistfp))['streets'];
+  links.forEach(function(link) {
     var fn = path.join(zipsdir, link.split('/').pop());
     var stream = fs.createWriteStream(fn);
     request(link)
@@ -63,22 +67,29 @@ function scrapeZip() {
   });
 }
 
-// get weird error - think it is related to csv processing
-// (node) warning: possible EventEmitter memory leak detected. 11 listeners added. Use emitter.setMaxListeners() to increase limit.
-// emitter.setMaxListeners(50)
-
 function consolidateZipToCsv() {
   var out = 'cache/streets.csv';
+  var stats = {
+    total: 0,
+    total_with_location: 0
+  };
   var stream = fs.createWriteStream(out);
+  // get weird error - think it is related to csv processing not unbinding listeners from this stream ...
+  // (node) warning: possible EventEmitter memory leak detected. 11 listeners added. Use emitter.setMaxListeners() to increase limit.
+  // emitter.setMaxListeners(50)
+  stream.setMaxListeners(0);
   
   // write the header
-  stream.write('Month,Reported by,Falls within,Longitude,Latitude,Location,Crime type,Context\n');
+  // stream.write('Month,Reported by,Falls within,Longitude,Latitude,Location,Crime type,Context\n');
+  // Drop "Falls within" - see below
+  stream.write('Month,Reported by,Longitude,Latitude,Location,Crime type,Context\n');
 
-  var links = JSON.parse(fs.readFileSync(outlistfp));
-  links = links.slice(0, 9);
+  var links = JSON.parse(fs.readFileSync(outlistfp))['streets'];
+  links = links.slice(0,20);
 
   function process(link, cb) {
     var fn = path.join(zipsdir, link.split('/').pop());
+    console.log('Processing: ' + fn);
     var unzip = spawn('unzip', ['-p', fn])
     var stripfirstline = spawn('sed', ['1d']);
     unzip.stdout.on('data', function(data) {
@@ -87,21 +98,49 @@ function consolidateZipToCsv() {
     unzip.on('exit', function() {
       stripfirstline.stdin.end();
     });
-    osgridToLonLatOnCsv(stripfirstline.stdout, stream, function() {
-      console.log('Processed: ' + fn);
-      cb()
-    });
-    // stripfirstline.stdout.on('data', function(data) {
-    //  stream.write(data);
-    // });
-    // stripfirstline.on('exit', function() {
-    //  console.log('Processed: ' + fn);
-    //  cb()
-    // });
+//    osgridToLonLatOnCsv(stripfirstline.stdout, stream, function(count) {
+//      console.log('Number of lines: ' + count);
+//      totalLines += count;
+//      console.log('Total lines so far:' + totalLines);
+//      cb()
+//    });
+    var csvprocess = csv();
+    var outcsv = csv();
+    outcsv.to.stream(stream);
+    csvprocess
+      .from.stream(stripfirstline.stdout)
+      .on('record', function(data, idx) {
+        stats.total += 1;
+        // we will be a bit brutal - discard everything w/o a location
+        // data[3] = Easting
+        if (!data[3]) {
+          return;
+        }
+        stats.total_with_location += 1;
+
+        // fix up easting / northing to lon/lat
+        var newval = convertEastingNorthingToLonLat(data.slice(3,5)); 
+        data.splice(3,2,newval[0], newval[1]);
+
+        // fix month
+        data[0] = data[0] + '-01';
+
+        // let's drop 'Falls within' but note first if "Reported by" and "Falls within" are different
+        if (data[1] != data[2]) { // so unusual worth noting!!
+          console.log(data); 
+        }
+        data.splice(1,1);
+        outcsv.write(data);
+      })
+      .on('end', function() {
+        console.log(stats);
+        cb();
+      });
   }
   var idx = 0;
   var looper = function() {
     if (idx >= links.length) {
+      console.log(stats);
       return;
     } else {
       process(links[idx], looper);
@@ -111,45 +150,27 @@ function consolidateZipToCsv() {
   looper();
 }
 
-function osgridToLonLatOnCsv(instream, outstream, cb) {
-  var proj4js = require('proj4js');
-  // hat-tip to Peter Hicks for providing the conversion spec
-  // http://blog.poggs.com/2010/09/converting-osgb36-eastingsnorthings-to-wgs84-longitudelatitude-in-ruby/
-  proj4js.defs["OSGB36"]="+proj=tmerc +lat_0=49 +lon_0=-2 +k=0.9996012717 +x_0=400000 +y_0=-100000 +ellps=airy +datum=OSGB36 +units=m +no_defs";
-  var srcproj = new proj4js.Proj('OSGB36');
+// Set up Projections for OSGB36 => WGS84 conversion
+var proj4js = require('proj4js');
+// hat-tip to Peter Hicks for providing the conversion spec
+// http://blog.poggs.com/2010/09/converting-osgb36-eastingsnorthings-to-wgs84-longitudelatitude-in-ruby/
+proj4js.defs["OSGB36"]="+proj=tmerc +lat_0=49 +lon_0=-2 +k=0.9996012717 +x_0=400000 +y_0=-100000 +ellps=airy +datum=OSGB36 +units=m +no_defs";
+var srcproj = new proj4js.Proj('OSGB36');
 
-  csv()
-    .from.stream(instream)
-    .to.stream(outstream)
-    .transform(function(data, idx) {
-      // data.unshift(data.pop());
-      var eastingnorthing = data.slice(3,5);
-      var eastingnorthing = [ parseInt(eastingnorthing[0]), parseInt(eastingnorthing[1]) ];
-      if (eastingnorthing[0]) {
-        var point = new proj4js.Point(eastingnorthing);
-        var out = proj4js.transform(srcproj, proj4js.WGS84, point);
-        data[3] = out.x;
-        data[4] = out.y;
-      }
-      return data;
-    })
-    .on('end', function(count){
-      console.log('Number of lines: '+count);
-      cb();
-    })
-    .on('error', function(error){
-      console.log(error.message);
-    });
-}
+// eastingsnorthing must be an array (easting, northing)
+// :return: [lon, lat]
+var convertEastingNorthingToLonLat = function(eastingnorthing) {
+  var eastingnorthing = [ parseInt(eastingnorthing[0]), parseInt(eastingnorthing[1]) ];
+  if (eastingnorthing[0]) {
+    var point = new proj4js.Point(eastingnorthing);
+    var out = proj4js.transform(srcproj, proj4js.WGS84, point);
+    return [out.x, out.y];
+  } else {
+    return null;
+  }
+};
 
-function demoConvert() {
-  var infp = 'cache/streets-small.csv';
-  var outfp = 'cache/streets-recoded.csv';
-  var instream = fs.createReadStream(infp);
-  var outstream = fs.createWriteStream(outfp);
-  osgridToLonLatOnCsv(instream, outstream);
-}
-
+// scrapeLinkList();
 // scrapeZip();
 consolidateZipToCsv();
 
