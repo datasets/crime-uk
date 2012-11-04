@@ -9,13 +9,17 @@ var csv = require('csv');
 
 var linklist = 'http://police.uk/data';
 var outlistfp = 'cache/linklist.json';
-var zipsdir = 'cache/zips';
+var zipsdir = 'cache/zip';
+var csvdir = 'cache/csv';
 
 if (!path.existsSync('cache')) {
   fs.mkdirSync('cache');
 }
 if (!path.existsSync(zipsdir)) {
   fs.mkdirSync(zipsdir);
+}
+if (!path.existsSync(csvdir)) {
+  fs.mkdirSync(csvdir);
 }
 
 function scrapeLinkList(cb) {
@@ -68,48 +72,36 @@ function scrapeZip() {
 }
 
 function consolidateZipToCsv() {
-  var out = 'cache/streets.csv';
   var stats = {
     total: 0,
     total_with_location: 0
   };
-  var stream = fs.createWriteStream(out);
   // get weird error - think it is related to csv processing not unbinding listeners from this stream ...
   // (node) warning: possible EventEmitter memory leak detected. 11 listeners added. Use emitter.setMaxListeners() to increase limit.
   // emitter.setMaxListeners(50)
-  stream.setMaxListeners(0);
+  // stream.setMaxListeners(0);
   
   // write the header
   // stream.write('Month,Reported by,Falls within,Longitude,Latitude,Location,Crime type,Context\n');
-  // Drop "Falls within" - see below
-  stream.write('Month,Reported by,Longitude,Latitude,Location,Crime type,Context\n');
+  // Drop "Falls within" as always repetition of Reported by AFAICt - see below for drop during processing
+  var headers = 'Month,Reported by,Longitude,Latitude,Location,Crime type,Context'.split(',');
 
   var links = JSON.parse(fs.readFileSync(outlistfp))['streets'];
-  links = links.slice(0,20);
+  links = links.slice(0,35);
 
   function process(link, cb) {
-    var fn = path.join(zipsdir, link.split('/').pop());
-    console.log('Processing: ' + fn);
-    var unzip = spawn('unzip', ['-p', fn])
-    var stripfirstline = spawn('sed', ['1d']);
-    unzip.stdout.on('data', function(data) {
-      stripfirstline.stdin.write(data);
-    });
-    unzip.on('exit', function() {
-      stripfirstline.stdin.end();
-    });
-//    osgridToLonLatOnCsv(stripfirstline.stdout, stream, function(count) {
-//      console.log('Number of lines: ' + count);
-//      totalLines += count;
-//      console.log('Total lines so far:' + totalLines);
-//      cb()
-//    });
-    var csvprocess = csv();
-    var outcsv = csv();
-    outcsv.to.stream(stream);
-    csvprocess
-      .from.stream(stripfirstline.stdout)
-      .on('record', function(data, idx) {
+    var fn = link.split('/').pop();
+    var csvpath = path.join(csvdir, fn + '.csv');
+    var zipfp = path.join(zipsdir, link.split('/').pop());
+    console.log('Processing: ' + zipfp + ' to ' + csvpath);
+    var unzip = spawn('unzip', ['-p', zipfp])
+    csv()
+      .from.stream(unzip.stdout)
+      .to.path(csvpath)
+      .transform(function(data, idx) {
+        if (idx == 0) {
+          return headers;
+        }
         stats.total += 1;
         // we will be a bit brutal - discard everything w/o a location
         // data[3] = Easting
@@ -130,11 +122,16 @@ function consolidateZipToCsv() {
           console.log(data); 
         }
         data.splice(1,1);
-        outcsv.write(data);
+        return data;
+      })
+      .on('record', function(data) {
       })
       .on('end', function() {
         console.log(stats);
         cb();
+      })
+      .on('error', function(error) {
+        console.log(error.message);
       });
   }
   var idx = 0;
@@ -164,11 +161,17 @@ var convertEastingNorthingToLonLat = function(eastingnorthing) {
   if (eastingnorthing[0]) {
     var point = new proj4js.Point(eastingnorthing);
     var out = proj4js.transform(srcproj, proj4js.WGS84, point);
-    return [out.x, out.y];
+    // 5 decimal places is ~1m accuracy
+    return [round(out.x,6), round(out.y,6)];
   } else {
     return null;
   }
 };
+
+function round(num, decPlaces) {
+  var scale = Math.pow(10,decPlaces);
+  return Math.round(num*scale)/scale;
+}
 
 // scrapeLinkList();
 // scrapeZip();
