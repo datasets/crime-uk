@@ -87,7 +87,7 @@ function consolidateZipToCsv() {
   var headers = 'Month,Reported by,Longitude,Latitude,Location,Crime type,Context'.split(',');
 
   var links = JSON.parse(fs.readFileSync(outlistfp))['streets'];
-  links = links.slice(0,35);
+  links = links.slice(0,45);
 
   function process(link, cb) {
     var fn = link.split('/').pop();
@@ -173,7 +173,93 @@ function round(num, decPlaces) {
   return Math.round(num*scale)/scale;
 }
 
+function computeStats(filterString) {
+  var links = JSON.parse(fs.readFileSync(outlistfp))['streets'];
+  links = links.filter(function(link) {
+    if (filterString) return (link.indexOf(filterString) != -1);
+    else return true;
+  });
+
+  var stats = {
+  };
+  // Month,Reported by,Longitude,Latitude,Location,Crime type,Context
+  var distinctRows = [0,1,5];
+  var processRow = function(row) {
+    var key = distinctRows.map(function(idx) {
+      return row[idx];
+    }).join(':::');
+    if (key in stats) {
+      stats[key] = stats[key] + 1;
+    } else {
+      stats[key] = 1;
+    }
+  }
+  var writeStats = function(theStats, stream) {
+    for (key in theStats) {
+      var row = ['Month'];
+      key.split(':::').forEach(function(val) {
+        row.push(val);
+      });
+      row.push(theStats[key]);
+      stream.write(row);
+    };
+  }
+
+  headers = 'Period,Date,Body,Type,Count'.split(',');
+  var outcsv = csv().to.path('cache/stats.csv');
+  outcsv.write(headers);
+
+  var idx = 0;
+  function process(link, cb) {
+    var csvpath = _csvFilePathFromLink(link);
+    csv()
+      .from.path(csvpath)
+      .on('record', function(data, idx) {
+        if (idx > 0) {
+          processRow(data)
+        }
+      })
+      .on('end', function() {
+        console.log('Processed ' + csvpath);
+        // now the loop
+        if (idx < links.length-1) {
+          idx += 1;
+          writeStats(stats, outcsv);
+          stats = {};
+          cb(links[idx], cb)
+        } else {
+          // really finished - write stats
+          writeStats(stats, outcsv);
+        }
+      });
+  }
+  process(links[0], process);
+}
+
+var _csvFilePathFromLink = function(link) {
+  var fn = link.split('/').pop();
+  var csvpath = path.join(csvdir, fn + '.csv');
+  return csvpath;
+}
+
 // scrapeLinkList();
 // scrapeZip();
-consolidateZipToCsv();
+// consolidateZipToCsv();
+
+// removes 'node' and this script
+args = process.argv.splice(2);
+
+if (args.length == 0) {
+  console.log('Commands are: fixtures | rebuild_db | load ');
+  return;
+}
+if (args.length >= 2) {
+  filter = args[1];
+}
+
+if (args[0] == 'consolidate') {
+  consolidateZipToCsv();
+} else if (args[0] == 'stats') {
+  computeStats();
+}
 
