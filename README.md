@@ -2,8 +2,10 @@ UK Crime data from the UK Government official source at <http://police.uk/data>.
 
 ## Stats format
 
+<pre>
 Date,Period,Area,Type,Count
 2012-04-01,Month,Avon and Somerset Constabulary,Burglary,51
+</pre>
 
 ## Street
 
