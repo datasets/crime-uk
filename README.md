@@ -2,7 +2,12 @@ UK Crime data. This is consolidation of, pointers to, and scripts for, data
 from various sources, primarily the UK Government site at
 <http://police.uk/data>.
 
-## Population Data
+## Forces Info
+
+See data/forces.csv and a GDocs version:
+<https://docs.google.com/spreadsheet/ccc?key=0Aon3JiuouxLUdHNQRGFWQzFRS21fWlV1bzhuSjlJSVE#gid=0>
+
+### Population Data
 
 Police Force area population numbers from the Home Office:
 <http://www.homeoffice.gov.uk/publications/science-research-statistics/research-statistics/crime-research/population-estimates/pfa-la-pop-house-nos-xls>
