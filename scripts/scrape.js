@@ -22,7 +22,7 @@ if (!path.existsSync(csvdir)) {
   fs.mkdirSync(csvdir);
 }
 
-function scrapeLinkList(cb) {
+function scrapeLinkList() {
   var out = {
     'streets': [],
     'neighbourhoods': [],
@@ -45,11 +45,55 @@ function scrapeLinkList(cb) {
       });
       // not interested in outcomes atm (final column)
 
+      $('#downloads .months table').first().find('tr').slice(1).each(function(idx, elem) {
+        var obj = {
+          id: $(elem).find('th').first().text(),
+          Label: $($(elem).find('td a')[1]).attr('href').split('/')[6].slice(8).replace('-neighbourhood.zip', '')
+        }
+        out['forces'].push(obj);
+      });
+      out['forces'].push({
+        id: 'btp',
+        label: 'British Transport Police'
+      });
+
       // now save
       fs.writeFile(outlistfp, JSON.stringify(out, null, 2), function(err) {
         console.log('JSON saved to ' + outlistfp);
-        cb();
       });
+      fs.writeFile('data/forces.json', JSON.stringify(out['forces'], null, 2), function(err) {
+        console.log('Forces data written');
+      });
+    }
+  });
+}
+
+function scrapeForces() {
+  var out = {
+    'forces': []
+  };
+  jsdom.env({
+    html: linklist,
+    scripts: [
+      'http://code.jquery.com/jquery.js'
+    ],
+    done: function(errors, window) {
+      // now save
+      var writer = csv().to.path('data/forces.csv');
+      writer.write(['id', 'label']);
+
+      var $ = window.$;
+      $('#downloads .months table').first().find('tr').slice(1).each(function(idx, elem) {
+        var obj = [
+          $($(elem).find('td a')[1]).attr('href').split('/')[6].slice(8).replace('-neighbourhood.zip', ''),
+          $(elem).find('th').first().text()
+        ];
+        writer.write(obj);
+      });
+     writer.write([ 
+        'btp',
+        'British Transport Police'
+      ]);
     }
   });
 }
@@ -257,7 +301,11 @@ if (args.length >= 2) {
   filter = args[1];
 }
 
-if (args[0] == 'consolidate') {
+if (args[0] == 'scrapelinks') {
+  scrapeLinkList();
+} else if (args[0] == 'scrapeforces') {
+  scrapeForces();
+} else if (args[0] == 'consolidate') {
   consolidateZipToCsv();
 } else if (args[0] == 'stats') {
   computeStats();
