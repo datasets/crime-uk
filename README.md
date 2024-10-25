@@ -1,4 +1,4 @@
-<a href="https://datahub.io/core/crime-uk"><img src="https://badgen.net/badge/icon/View%20on%20datahub.io/orange?icon=https://datahub.io/datahub-cube-badge-icon.svg&label&scale=1.25)" alt="badge" /></a>
+<a className="gh-badge" href="https://datahub.io/core/crime-uk"><img src="https://badgen.net/badge/icon/View%20on%20datahub.io/orange?icon=https://datahub.io/datahub-cube-badge-icon.svg&label&scale=1.25" alt="badge" /></a>
 
 UK Crime data. This is consolidation of, pointers to, and scripts for, data
 from various sources, primarily the UK Government site at
